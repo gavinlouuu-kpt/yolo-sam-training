@@ -12,6 +12,34 @@ A Python package for training and fine-tuning Segment Anything Model (SAM) using
 - Robust training pipeline with validation and visualization
 - Modular design for easy extension and customization
 
+## Integration with Label Studio
+
+This package works seamlessly with data exported from Label Studio using our companion package `label-studio-interface`. The workflow is:
+
+1. **Export Data from Label Studio**:
+   ```python
+   from label_studio_processor.examples.prepare_training_data import main as prepare_data
+   
+   # Export and prepare data from Label Studio
+   prepare_data()  # This creates the expected directory structure
+   ```
+
+2. **Train SAM Model**:
+   ```python
+   from yolo_sam_training.examples.sam_training_example import main as train_sam
+   
+   # Train model using the exported data
+   train_sam()
+   ```
+
+The `label-studio-interface` package handles:
+- Downloading images from Label Studio
+- Converting brush annotations to masks
+- Generating YOLO format boxes
+- Creating the directory structure expected by this package
+
+You can use this training package with any data in the correct format, not just from Label Studio.
+
 ## Installation
 
 ```bash
