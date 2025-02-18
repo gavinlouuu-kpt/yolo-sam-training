@@ -321,7 +321,10 @@ def preprocess_for_sam(
         **processor_kwargs: Additional arguments to pass to the processor
         
     Returns:
-        Dictionary containing preprocessed tensors for SAM model
+        Dictionary containing preprocessed tensors for SAM model with shapes:
+        - pixel_values: [1, 3, 1024, 1024]
+        - input_boxes: [1, num_masks, 4]
+        - labels: [1, num_masks, height, width] if masks provided
     """
     # Initialize processor if not provided
     if processor is None:
@@ -346,32 +349,24 @@ def preprocess_for_sam(
     }
     processor_kwargs = {**default_kwargs, **processor_kwargs}
     
-    # Prepare inputs for SAM
     try:
-        # Process each box and mask pair
-        all_inputs = []
-        for i, box in enumerate(pixel_boxes):
-            inputs = processor(
-                images=image,
-                input_boxes=[[box]],  # Process single box
-                segmentation_maps=[mask_pils[i]] if mask_pils else None,
-                **processor_kwargs
-            )
-            all_inputs.append(inputs)
+        # Process all boxes together
+        inputs = processor(
+            images=image,
+            input_boxes=[pixel_boxes],  # Wrap in list for batch dimension
+            segmentation_maps=mask_pils if mask_pils else None,
+            **processor_kwargs
+        )
         
-        # Combine all inputs
-        combined_inputs = {
-            'pixel_values': torch.cat([inp['pixel_values'] for inp in all_inputs]),
-            'input_boxes': torch.cat([inp['input_boxes'] for inp in all_inputs]),
-            'original_sizes': torch.cat([inp['original_sizes'] for inp in all_inputs]),
-            'reshaped_input_sizes': torch.cat([inp['reshaped_input_sizes'] for inp in all_inputs])
-        }
+        # Ensure proper shapes
+        if 'labels' in inputs and masks is not None:
+            # Stack masks along mask dimension
+            inputs['labels'] = inputs['labels'].reshape(1, len(masks), *inputs['labels'].shape[-2:])
         
-        # Add labels if masks were provided
-        if mask_pils:
-            combined_inputs['labels'] = torch.cat([inp['labels'] for inp in all_inputs])
+        # Ensure input_boxes has correct shape [1, num_masks, 4]
+        inputs['input_boxes'] = inputs['input_boxes'].reshape(1, len(pixel_boxes), 4)
         
-        return combined_inputs
+        return inputs
         
     except Exception as e:
         logger.error(f"Error during SAM preprocessing: {str(e)}")
@@ -724,10 +719,10 @@ class SAMDataset(torch.utils.data.Dataset):
 def custom_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Custom collate function to handle varying image sizes and other data types.
     
-    TODO:
-        - Add support for multiple instance masks
-        - Implement more efficient padding
-        - Consider adding batch statistics
+    Expected output shapes:
+    - pixel_values: [batch_size, 3, 1024, 1024]
+    - input_boxes: [batch_size, max_masks, 4]
+    - labels: [batch_size, max_masks, height, width]
     """
     # Initialize output dictionary
     output = {}
@@ -735,94 +730,76 @@ def custom_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     # Get all keys from first sample
     keys = batch[0].keys()
     
+    # First, find the maximum number of masks in the batch
+    max_masks = max(
+        sample['input_boxes'].shape[1] 
+        for sample in batch
+    )
+    
     for key in keys:
         values = [sample[key] for sample in batch]
         
-        # Handle different types of data
         if isinstance(values[0], torch.Tensor):
             if key == 'pixel_values':
-                # Log shape information for debugging
-                logger.debug(f"First image shape: {values[0].shape}")
+                # Stack images along batch dimension
+                output[key] = torch.cat([v for v in values], dim=0)
                 
-                # For images, pad to max size in batch
-                # Handle both [C, H, W] and [H, W, C] formats
-                if len(values[0].shape) == 3:
-                    if values[0].shape[-1] == 3:  # [H, W, C] format
-                        max_h = max(x.shape[0] for x in values)
-                        max_w = max(x.shape[1] for x in values)
-                        
-                        # Pad each image to max size
-                        padded_values = []
-                        for img in values:
-                            h, w = img.shape[:2]
-                            pad_h = max_h - h
-                            pad_w = max_w - w
-                            if pad_h > 0 or pad_w > 0:
-                                padding = (0, 0, 0, pad_w, 0, pad_h)  # pad last two dims
-                                img = torch.nn.functional.pad(img, padding)
-                            padded_values.append(img)
-                        
-                        # Stack and permute to [B, C, H, W]
-                        output[key] = torch.stack(padded_values).permute(0, 3, 1, 2)
-                    else:  # [C, H, W] format
-                        max_h = max(x.shape[1] for x in values)
-                        max_w = max(x.shape[2] for x in values)
-                        
-                        # Pad each image to max size
-                        padded_values = []
-                        for img in values:
-                            h, w = img.shape[1:]
-                            pad_h = max_h - h
-                            pad_w = max_w - w
-                            if pad_h > 0 or pad_w > 0:
-                                padding = (0, pad_w, 0, pad_h)  # left, right, top, bottom
-                                img = torch.nn.functional.pad(img, padding)
-                            padded_values.append(img)
-                        
-                        output[key] = torch.stack(padded_values)
-                else:
-                    # If not 3D tensor, just try stacking
-                    try:
-                        output[key] = torch.stack(values)
-                    except:
-                        output[key] = values
-            elif key == 'labels' or key == 'mask':
-                # For masks, ensure proper padding
-                if len(values[0].shape) == 2:  # [H, W] format
-                    max_h = max(x.shape[0] for x in values)
-                    max_w = max(x.shape[1] for x in values)
-                    
-                    padded_values = []
-                    for mask in values:
-                        h, w = mask.shape
-                        pad_h = max_h - h
-                        pad_w = max_w - w
-                        if pad_h > 0 or pad_w > 0:
-                            padding = (0, pad_w, 0, pad_h)
-                            mask = torch.nn.functional.pad(mask, padding)
-                        padded_values.append(mask)
-                    
-                    output[key] = torch.stack(padded_values)
-                else:
-                    try:
-                        output[key] = torch.stack(values)
-                    except:
-                        output[key] = values
+            elif key == 'input_boxes':
+                # Pad boxes to max_masks
+                padded_boxes = []
+                for boxes in values:
+                    num_masks = boxes.shape[1]
+                    if num_masks < max_masks:
+                        # Pad with zeros
+                        padding = torch.zeros(
+                            (1, max_masks - num_masks, 4),
+                            device=boxes.device,
+                            dtype=boxes.dtype
+                        )
+                        boxes = torch.cat([boxes, padding], dim=1)
+                    padded_boxes.append(boxes)
+                output[key] = torch.cat(padded_boxes, dim=0)
+                
+            elif key == 'labels':
+                # Pad labels to max_masks
+                padded_labels = []
+                for label in values:
+                    num_masks = label.shape[1]
+                    if num_masks < max_masks:
+                        # Pad with zeros
+                        padding = torch.zeros(
+                            (1, max_masks - num_masks, *label.shape[-2:]),
+                            device=label.device,
+                            dtype=label.dtype
+                        )
+                        label = torch.cat([label, padding], dim=1)
+                    padded_labels.append(label)
+                output[key] = torch.cat(padded_labels, dim=0)
+                
             else:
-                # For other tensors, try regular stacking
+                # For other tensors (like original_sizes), just stack
                 try:
-                    output[key] = torch.stack(values)
+                    output[key] = torch.cat(values, dim=0)
                 except:
                     output[key] = values
+                    
         elif isinstance(values[0], (list, tuple)):
-            # Keep lists/tuples as is
             output[key] = values
         elif isinstance(values[0], dict):
-            # For nested dictionaries (like original_data)
             output[key] = values
         else:
-            # For other types (strings, etc)
             output[key] = values
+    
+    # Add batch information
+    output['num_masks_per_sample'] = torch.tensor([
+        sample['input_boxes'].shape[1] for sample in batch
+    ], dtype=torch.long)
+    
+    # Log shapes for debugging
+    logger.debug("Batch shapes after collation:")
+    for key, value in output.items():
+        if isinstance(value, torch.Tensor):
+            logger.debug(f"  {key}: {value.shape}")
     
     return output
 

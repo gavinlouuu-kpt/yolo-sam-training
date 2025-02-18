@@ -9,7 +9,8 @@ A Python package for training and fine-tuning Segment Anything Model (SAM) using
 - Prepare data for SAM model training
 - Split datasets into train/test sets with stratification
 - Custom DataLoader with support for variable-sized images
-- Visualization tools for preprocessing steps
+- Robust training pipeline with validation and visualization
+- Modular design for easy extension and customization
 
 ## Installation
 
@@ -17,9 +18,25 @@ A Python package for training and fine-tuning Segment Anything Model (SAM) using
 pip install -e .
 ```
 
+## Project Structure
+
+```
+yolo-sam-training/
+├── src/
+│   └── yolo_sam_training/
+│       ├── data.py           # Data loading and preprocessing
+│       ├── training.py       # Training utilities and functions
+│       └── examples/
+│           ├── dataset_loading_example.py
+│           ├── sam_preprocessing_example.py
+│           └── sam_training_example.py
+├── tests/
+└── README.md
+```
+
 ## Usage
 
-### Basic Usage
+### 1. Data Loading and Preprocessing
 
 ```python
 from yolo_sam_training.data import (
@@ -53,6 +70,52 @@ train_loader, test_loader = create_dataloaders(
 )
 ```
 
+### 2. Training SAM Model
+
+```python
+from yolo_sam_training.training import train_sam_model
+
+# Train model
+best_model_state, loss_plot = train_sam_model(
+    train_loader=train_loader,
+    val_loader=test_loader,
+    model_save_path='models/sam_fine_tuned',
+    visualization_dir='visualization_output/training',
+    num_epochs=10,
+    learning_rate=1e-5
+)
+```
+
+## Training Module Features
+
+The `training.py` module provides a comprehensive set of utilities for training SAM:
+
+1. **Shape Validation**
+   - `validate_batch_shapes`: Ensures tensor shapes match SAM requirements
+   - `validate_pred_masks`: Normalizes and validates predicted mask shapes
+
+2. **Loss Computation**
+   - `compute_batch_loss`: Handles variable numbers of masks per sample
+   - Supports any PyTorch loss function
+   - Properly handles batch-level loss aggregation
+
+3. **Training Loop**
+   - `train_one_epoch`: Manages single epoch training
+   - `validate_one_epoch`: Handles validation
+   - Progress tracking with tqdm
+   - Comprehensive error handling
+
+4. **Visualization**
+   - `save_prediction_visualization`: Creates detailed mask visualizations
+   - Training progress plots
+   - Support for multiple masks per image
+
+5. **Model Management**
+   - Automatic device handling (CPU/CUDA)
+   - Model checkpoint saving
+   - Best model tracking
+   - Training state logging
+
 ## Data Format
 
 ### Expected Directory Structure
@@ -79,36 +142,44 @@ class x_center y_center width height  # First mask
 class x_center y_center width height  # Second mask
 ```
 
-### Multiple Instance Support
+## Training Configuration
 
-The package now fully supports multiple instance masks per image:
+The training process can be customized through various parameters:
 
-1. **Loading Multiple Masks**
-   - Masks are named with index suffixes (e.g., `image1_0.png`, `image1_1.png`)
-   - Each mask corresponds to one box in the YOLO format file
-   - Automatic validation ensures matching mask-box pairs
+```python
+train_sam_model(
+    train_loader,
+    val_loader,
+    model_save_path,
+    num_epochs=10,          # Number of training epochs
+    learning_rate=1e-5,     # Learning rate for optimizer
+    weight_decay=0,         # Weight decay for regularization
+    visualization_dir=None, # Directory for saving visualizations
+    device=None            # Device to use (auto-detected if None)
+)
+```
 
-2. **Data Structure**
-   ```python
-   dataset = {
-       'task_id': {
-           'image': np.ndarray,  # Single image
-           'masks': List[np.ndarray],  # List of masks
-           'boxes': List[List[float]],  # List of YOLO boxes
-           'sam_data': Dict  # SAM-ready data
-       }
-   }
-   ```
+### Key Features:
 
-3. **Batch Processing**
-   - Each sample can have different numbers of masks
-   - Batches maintain mask-box correspondence
-   - Automatic handling of variable instance counts
+1. **Automatic Device Selection**
+   - Automatically uses CUDA if available
+   - Falls back to CPU if CUDA is not available
+   - Configurable through device parameter
+
+2. **Model Architecture**
+   - Uses SAM base model from HuggingFace
+   - Freezes encoder parameters by default
+   - Only fine-tunes mask decoder
+
+3. **Loss Function**
+   - Uses DiceCELoss from MONAI
+   - Handles variable numbers of masks
+   - Properly weighted loss computation
 
 4. **Visualization**
-   - Support for visualizing multiple masks per image
-   - Different intensities for distinguishing instances
-   - Combined mask visualization options
+   - Per-epoch visualization of predictions
+   - Training/validation loss plots
+   - Sample-level mask comparisons
 
 ## Current Limitations and TODOs
 
