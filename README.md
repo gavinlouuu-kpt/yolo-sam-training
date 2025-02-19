@@ -21,16 +21,55 @@ This package works seamlessly with data exported from Label Studio using our com
    from label_studio_processor.examples.prepare_training_data import main as prepare_data
    
    # Export and prepare data from Label Studio
-   prepare_data()  # This creates the expected directory structure
+   prepare_data()  # This creates the expected directory structure in your specified data directory
    ```
 
-2. **Train SAM Model**:
+2. **Set Data Directory Environment Variable**:
+   ```bash
+   # Temporarily set the data directory for this session
+   export TRAINING_DATA_DIR=/path/to/your/data
+   
+   # Or for just a single command:
+   TRAINING_DATA_DIR=/path/to/your/data python -m yolo_sam_training.examples.sam_training_example
+   ```
+
+3. **Train SAM Model**:
    ```python
    from yolo_sam_training.examples.sam_training_example import main as train_sam
    
    # Train model using the exported data
    train_sam()
    ```
+
+The workflow is designed to be flexible:
+- `label-studio-processor` exports data to your specified directory
+- Set `TRAINING_DATA_DIR` environment variable to tell this package where to find the data
+- Use temporary environment variables to avoid persistent path settings
+
+### Data Directory Configuration
+
+The package looks for training data using this priority:
+1. `TRAINING_DATA_DIR` environment variable if set
+2. Default fallback path if not set
+
+You can set the data directory in several ways:
+
+```bash
+# Method 1: Temporary for single session
+export TRAINING_DATA_DIR=/Users/your_user/path/to/data
+
+# Method 2: Single command (most recommended)
+TRAINING_DATA_DIR=/Users/your_user/path/to/data python -m yolo_sam_training.examples.dataset_loading_example
+
+# Method 3: Default fallback in code
+# The package will use a default path if no environment variable is set
+```
+
+We recommend Method 2 (single command) as it:
+- Keeps the path setting temporary
+- Makes the data location explicit
+- Avoids conflicts between different projects
+- Cleans up automatically when the command finishes
 
 The `label-studio-interface` package handles:
 - Downloading images from Label Studio

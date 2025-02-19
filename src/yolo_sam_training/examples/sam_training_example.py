@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 import torch
 import matplotlib.pyplot as plt
+import os
 
 from yolo_sam_training.data import (
     load_dataset_from_summary,
@@ -11,7 +12,7 @@ from yolo_sam_training.data import (
     split_dataset,
     create_dataloaders
 )
-from yolo_sam_training.training import train_sam_model
+from yolo_sam_training.sam_training import train_sam_model
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -27,9 +28,17 @@ def main():
     # Set default device
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    # Load and preprocess dataset
-    summary_path = Path('D:/code/ai_cytometry/data/example_training_data/summary.json')
-    logger.info("Loading dataset...")
+    # Get data directory from environment variable or use default
+    data_dir = os.getenv('TRAINING_DATA_DIR', '/Users/kpt/Code/data')
+    summary_path = Path(data_dir) / 'example_training_data' / 'summary.json'
+    
+    # Check if the file exists
+    if not summary_path.exists():
+        logger.error(f"Summary file not found at: {summary_path}")
+        logger.error("Please set TRAINING_DATA_DIR environment variable to point to your data directory")
+        return
+    
+    logger.info(f"Loading dataset from: {summary_path}")
     dataset = load_dataset_from_summary(summary_path)
     
     processed_dataset = process_dataset_with_sam(
