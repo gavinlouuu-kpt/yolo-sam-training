@@ -1,15 +1,15 @@
 # YOLO-SAM Training
 
-A Python package for training and fine-tuning Segment Anything Model (SAM) using YOLO-format annotations.
+A Python package for training and fine-tuning both YOLO and Segment Anything Model (SAM) using a unified data format.
 
 ## Features
 
-- Load and preprocess images, masks, and YOLO-format annotations
-- Support for multiple instance masks per image
-- Prepare data for SAM model training
-- Split datasets into train/test sets with stratification
-- Custom DataLoader with support for variable-sized images
-- Robust training pipeline with validation and visualization
+- Load and preprocess images and annotations for both YOLO and SAM training
+- Support for multiple instance masks and bounding boxes per image
+- Automatic dataset splitting with train/validation sets
+- Integration with Ultralytics YOLO for object detection
+- SAM fine-tuning with bounding box prompts
+- Comprehensive logging and visualization tools
 - Modular design for easy extension and customization
 
 ## Integration with Label Studio
@@ -21,63 +21,147 @@ This package works seamlessly with data exported from Label Studio using our com
    from label_studio_processor.examples.prepare_training_data import main as prepare_data
    
    # Export and prepare data from Label Studio
-   prepare_data()  # This creates the expected directory structure in your specified data directory
+   prepare_data()  # Creates the expected directory structure
    ```
 
 2. **Set Data Directory Environment Variable**:
    ```bash
-   # Temporarily set the data directory for this session
    export TRAINING_DATA_DIR=/path/to/your/data
-   
-   # Or for just a single command:
-   TRAINING_DATA_DIR=/path/to/your/data python -m yolo_sam_training.examples.sam_training_example
    ```
 
-3. **Train SAM Model**:
+3. **Train Models**:
    ```python
-   from yolo_sam_training.examples.sam_training_example import main as train_sam
+   # Train YOLO model
+   python -m yolo_sam_training.examples.yolo_training_example
    
-   # Train model using the exported data
-   train_sam()
+   # Train SAM model
+   python -m yolo_sam_training.examples.sam_training_example
    ```
 
-The workflow is designed to be flexible:
-- `label-studio-processor` exports data to your specified directory
-- Set `TRAINING_DATA_DIR` environment variable to tell this package where to find the data
-- Use temporary environment variables to avoid persistent path settings
+## Data Directory Structure
 
-### Data Directory Configuration
-
-The package looks for training data using this priority:
-1. `TRAINING_DATA_DIR` environment variable if set
-2. Default fallback path if not set
-
-You can set the data directory in several ways:
-
-```bash
-# Method 1: Temporary for single session
-export TRAINING_DATA_DIR=/Users/your_user/path/to/data
-
-# Method 2: Single command (most recommended)
-TRAINING_DATA_DIR=/Users/your_user/path/to/data python -m yolo_sam_training.examples.dataset_loading_example
-
-# Method 3: Default fallback in code
-# The package will use a default path if no environment variable is set
+Expected structure after Label Studio export:
+```
+data/
+├── images/
+│   ├── image1.png
+│   └── image2.png
+├── labels/           # YOLO format annotations
+│   ├── image1.txt
+│   └── image2.txt
+└── masks/           # For SAM training
+    ├── image1_0.png
+    └── image2_0.png
 ```
 
-We recommend Method 2 (single command) as it:
-- Keeps the path setting temporary
-- Makes the data location explicit
-- Avoids conflicts between different projects
-- Cleans up automatically when the command finishes
+## YOLO Training
 
-The `label-studio-interface` package handles:
-- Downloading images from Label Studio
-- Converting brush annotations to masks
-- Generating YOLO format boxes
-- Creating the directory structure expected by this package
+### Dataset Preparation
+```python
+from yolo_sam_training.yolo_training import prepare_yolo_dataset
 
-You can use this training package with any data in the correct format, not just from Label Studio.
+# Prepare dataset with train/val split
+yaml_path = prepare_yolo_dataset(
+    source_dir='/path/to/source',
+    output_dir='/path/to/prepared_dataset',
+    split_ratio=0.2
+)
+```
+
+### Training
+```python
+from yolo_sam_training.yolo_training import train_yolo_model
+
+# Train YOLO model
+metrics = train_yolo_model(
+    yaml_path=yaml_path,
+    model_save_path='models/yolo_fine_tuned',
+    pretrained_model='yolov8n.pt',
+    num_epochs=100,
+    image_size=640,
+    batch_size=16,
+    device='0',  # Use '0' for first GPU, 'cpu' for CPU
+    learning_rate=0.01
+)
+```
+
+### Validation
+```python
+from yolo_sam_training.yolo_training import validate_yolo_model
+
+# Validate trained model
+validation_metrics = validate_yolo_model(
+    model_path='models/yolo_fine_tuned/weights/best.pt',
+    data_yaml=yaml_path,
+    image_size=640,
+    device='0'
+)
+```
+
+## SAM Training
+
+### Data Processing
+```python
+from yolo_sam_training.data import (
+    load_dataset_from_summary,
+    process_dataset_with_sam,
+    split_dataset,
+    create_dataloaders
+)
+
+# Load and process dataset
+dataset = load_dataset_from_summary('path/to/summary.json')
+processed_dataset = process_dataset_with_sam(dataset)
+
+# Create train/test split
+train_dataset, test_dataset = split_dataset(
+    dataset=processed_dataset,
+    test_size=0.2
+)
+
+# Create dataloaders
+train_loader, test_loader = create_dataloaders(
+    train_dataset=train_dataset,
+    test_dataset=test_dataset,
+    batch_size=4
+)
+```
+
+### Training
+```python
+from yolo_sam_training.sam_training import train_sam_model
+
+# Train SAM model
+best_model_state, loss_plot = train_sam_model(
+    train_loader=train_loader,
+    val_loader=test_loader,
+    model_save_path='models/sam_fine_tuned',
+    visualization_dir='visualization_output/training',
+    num_epochs=10,
+    learning_rate=1e-5
+)
+```
+
+## Model Configuration
+
+### YOLO Configuration
+- Uses Ultralytics YOLOv8
+- Supports various model sizes (nano to extra large)
+- Configurable training parameters:
+  - Image size
+  - Batch size
+  - Learning rate
+  - Number of epochs
+  - Early stopping patience
+
+### SAM Configuration
+- Uses HuggingFace SAM implementation
+- Supports bounding box prompts
+- Configurable training parameters:
+  - Learning rate
+  - Weight decay
+  - Number of epochs
+  - Visualization options
 
 ## Installation
 
@@ -92,186 +176,38 @@ yolo-sam-training/
 ├── src/
 │   └── yolo_sam_training/
 │       ├── data.py           # Data loading and preprocessing
-│       ├── training.py       # Training utilities and functions
+│       ├── yolo_training.py  # YOLO training utilities
+│       ├── sam_training.py   # SAM training utilities
 │       └── examples/
-│           ├── dataset_loading_example.py
-│           ├── sam_preprocessing_example.py
+│           ├── yolo_training_example.py
 │           └── sam_training_example.py
 ├── tests/
 └── README.md
 ```
 
-## Usage
-
-### 1. Data Loading and Preprocessing
-
-```python
-from yolo_sam_training.data import (
-    load_dataset_from_summary,
-    process_dataset_with_sam,
-    split_dataset,
-    create_dataloaders
-)
-
-# Load dataset
-dataset = load_dataset_from_summary('path/to/summary.json')
-
-# Preprocess for SAM
-processed_dataset = process_dataset_with_sam(
-    dataset=dataset,
-    save_visualizations=True  # Optional
-)
-
-# Split dataset
-train_dataset, test_dataset = split_dataset(
-    dataset=processed_dataset,
-    test_size=0.2,
-    stratify_by_box_count=True
-)
-
-# Create dataloaders
-train_loader, test_loader = create_dataloaders(
-    train_dataset=train_dataset,
-    test_dataset=test_dataset,
-    batch_size=4
-)
-```
-
-### 2. Training SAM Model
-
-```python
-from yolo_sam_training.training import train_sam_model
-
-# Train model
-best_model_state, loss_plot = train_sam_model(
-    train_loader=train_loader,
-    val_loader=test_loader,
-    model_save_path='models/sam_fine_tuned',
-    visualization_dir='visualization_output/training',
-    num_epochs=10,
-    learning_rate=1e-5
-)
-```
-
-## Training Module Features
-
-The `training.py` module provides a comprehensive set of utilities for training SAM:
-
-1. **Shape Validation**
-   - `validate_batch_shapes`: Ensures tensor shapes match SAM requirements
-   - `validate_pred_masks`: Normalizes and validates predicted mask shapes
-
-2. **Loss Computation**
-   - `compute_batch_loss`: Handles variable numbers of masks per sample
-   - Supports any PyTorch loss function
-   - Properly handles batch-level loss aggregation
-
-3. **Training Loop**
-   - `train_one_epoch`: Manages single epoch training
-   - `validate_one_epoch`: Handles validation
-   - Progress tracking with tqdm
-   - Comprehensive error handling
-
-4. **Visualization**
-   - `save_prediction_visualization`: Creates detailed mask visualizations
-   - Training progress plots
-   - Support for multiple masks per image
-
-5. **Model Management**
-   - Automatic device handling (CPU/CUDA)
-   - Model checkpoint saving
-   - Best model tracking
-   - Training state logging
-
-## Data Format
-
-### Expected Directory Structure
-```
-data/
-├── images/
-│   ├── image1.png
-│   └── image2.png
-├── masks/
-│   ├── image1_0.png  # First mask for image1
-│   ├── image1_1.png  # Second mask for image1
-│   ├── image2_0.png  # First mask for image2
-│   └── image2_1.png  # Second mask for image2
-├── boxes/
-│   ├── image1.txt    # Contains multiple boxes, one per mask
-│   └── image2.txt    # Contains multiple boxes, one per mask
-└── summary.json
-```
-
-### YOLO Box Format
-Each line in the box file corresponds to a mask:
-```
-class x_center y_center width height  # First mask
-class x_center y_center width height  # Second mask
-```
-
-## Training Configuration
-
-The training process can be customized through various parameters:
-
-```python
-train_sam_model(
-    train_loader,
-    val_loader,
-    model_save_path,
-    num_epochs=10,          # Number of training epochs
-    learning_rate=1e-5,     # Learning rate for optimizer
-    weight_decay=0,         # Weight decay for regularization
-    visualization_dir=None, # Directory for saving visualizations
-    device=None            # Device to use (auto-detected if None)
-)
-```
-
-### Key Features:
-
-1. **Automatic Device Selection**
-   - Automatically uses CUDA if available
-   - Falls back to CPU if CUDA is not available
-   - Configurable through device parameter
-
-2. **Model Architecture**
-   - Uses SAM base model from HuggingFace
-   - Freezes encoder parameters by default
-   - Only fine-tunes mask decoder
-
-3. **Loss Function**
-   - Uses DiceCELoss from MONAI
-   - Handles variable numbers of masks
-   - Properly weighted loss computation
-
-4. **Visualization**
-   - Per-epoch visualization of predictions
-   - Training/validation loss plots
-   - Sample-level mask comparisons
-
 ## Current Limitations and TODOs
 
 ### Data Augmentation
-- To be implemented in `SAMDataset.__getitem__`
-- Planned augmentations:
+- Implement consistent augmentation across YOLO and SAM training
+- Add support for:
   - Rotation
   - Flipping
   - Color jittering
   - Random cropping
-- Will ensure consistency across instances
 
 ### Memory Management
-- Large datasets might need lazy loading
-- Planning to implement:
+- Implement efficient data loading for large datasets
+- Add support for:
   - Data streaming
   - Memory usage monitoring
   - Caching mechanisms
 
 ### Error Handling
-- Need to add:
-  - More robust validation for mask-box correspondence
-  - Data integrity checks
-  - Input validation
-  - Better error messages
+- Add comprehensive validation for:
+  - Dataset integrity
+  - Model configurations
+  - Training parameters
+  - Input formats
 
 ## Contributing
 

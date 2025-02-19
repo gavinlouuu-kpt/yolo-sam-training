@@ -1,3 +1,7 @@
+# PyTorch model files
+*.pt
+*.pth
+
 # Python
 __pycache__/
 *.py[cod]
@@ -19,6 +23,31 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Training outputs
+runs/
+models/
+*.onnx
+wandb/
+visualization_output/
+
+# Data and models
+data/
+*.pt
 
 # Virtual Environment
 venv/
