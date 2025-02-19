@@ -105,7 +105,7 @@ def prepare_yolo_dataset(
 def train_yolo_model(
     yaml_path: Path,
     model_save_path: Path,
-    pretrained_model: str = 'yolov8n.pt',
+    pretrained_model: str | YOLO = 'yolov8n.pt',
     num_epochs: int = 100,
     image_size: int = 640,
     batch_size: int = 16,
@@ -118,7 +118,7 @@ def train_yolo_model(
     Args:
         yaml_path: Path to dataset YAML file
         model_save_path: Path to save the trained model
-        pretrained_model: Path or name of pretrained model to start from
+        pretrained_model: Path/name of pretrained model or pre-initialized YOLO model
         num_epochs: Number of training epochs
         image_size: Input image size
         batch_size: Training batch size
@@ -147,10 +147,14 @@ def train_yolo_model(
     model_save_path.parent.mkdir(parents=True, exist_ok=True)
     
     logger.info("Initializing YOLO model training...")
-    logger.info(f"Using pretrained model: {pretrained_model}")
     
     # Initialize model
-    model = YOLO(pretrained_model)
+    if isinstance(pretrained_model, str):
+        logger.info(f"Using pretrained model: {pretrained_model}")
+        model = YOLO(pretrained_model)
+    else:
+        logger.info("Using pre-initialized YOLO model")
+        model = pretrained_model
     
     # Configure training parameters
     training_args = {
@@ -169,24 +173,42 @@ def train_yolo_model(
         'patience': 50,  # Early stopping patience
         'save': True,
         'save_period': -1,  # Save only best and last
+        'amp': True,  # Use mixed precision training
+        'plots': True,  # Generate training plots
     }
     
     try:
         # Train the model
         results = model.train(**training_args)
         
-        # Extract final metrics
-        metrics = {
-            'mAP50': results.results_dict['metrics/mAP50(B)'],
-            'mAP50-95': results.results_dict['metrics/mAP50-95(B)'],
-            'precision': results.results_dict['metrics/precision(B)'],
-            'recall': results.results_dict['metrics/recall(B)'],
-            'final_loss': results.results_dict['train/box_loss']
+        # Extract final metrics - using more robust access method
+        metrics = {}
+        results_dict = results.results_dict
+        
+        # Map common metric names and provide fallbacks
+        metric_mappings = {
+            'mAP50': ['metrics/mAP50(B)', 'metrics/mAP50'],
+            'mAP50-95': ['metrics/mAP50-95(B)', 'metrics/mAP50-95'],
+            'precision': ['metrics/precision(B)', 'metrics/precision'],
+            'recall': ['metrics/recall(B)', 'metrics/recall']
         }
         
+        for metric_name, possible_keys in metric_mappings.items():
+            for key in possible_keys:
+                if key in results_dict:
+                    metrics[metric_name] = results_dict[key]
+                    break
+            
+        # Add any available loss metrics
+        for key in results_dict:
+            if 'loss' in key.lower():
+                metrics[key] = results_dict[key]
+        
         logger.info("Training completed successfully!")
-        logger.info(f"Final mAP50: {metrics['mAP50']:.4f}")
-        logger.info(f"Final mAP50-95: {metrics['mAP50-95']:.4f}")
+        if 'mAP50' in metrics:
+            logger.info(f"Final mAP50: {metrics['mAP50']:.4f}")
+        if 'mAP50-95' in metrics:
+            logger.info(f"Final mAP50-95: {metrics['mAP50-95']:.4f}")
         
         return metrics
         
@@ -198,7 +220,7 @@ def validate_yolo_model(
     model_path: Path,
     data_yaml: Path,
     image_size: int = 640,
-    device: Optional[str] = None
+    device: Optional[str] = None,
 ) -> Dict[str, float]:
     """
     Validate a trained YOLO model.

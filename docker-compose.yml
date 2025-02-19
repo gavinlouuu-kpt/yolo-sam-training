@@ -1,0 +1,37 @@
+version: '3'
+
+services:
+  mlflow-db:
+    image: postgres:14
+    container_name: mlflow-db
+    environment:
+      - POSTGRES_USER=mlflow
+      - POSTGRES_PASSWORD=mlflow
+      - POSTGRES_DB=mlflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - mlflow-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-U", "mlflow" ]
+      interval: 5s
+      retries: 5
+
+  mlflow-server:
+    image: ghcr.io/mlflow/mlflow:v2.10.0
+    container_name: mlflow-server
+    depends_on:
+      mlflow-db:
+        condition: service_healthy
+    ports:
+      - "5000:5000"
+    environment:
+      - MLFLOW_TRACKING_URI=postgresql://mlflow:mlflow@mlflow-db:5432/mlflow
+    volumes:
+      - ./mlflow-artifacts:/mlflow/artifacts
+    command: >
+      bash -c "pip install psycopg2-binary && mlflow server --host 0.0.0.0 --port 5000  --backend-store-uri postgresql://mlflow:mlflow@mlflow-db:5432/mlflow  --default-artifact-root /mlflow/artifacts"
+
+volumes:
+  mlflow-db-data:
+  mlflow-artifacts:

@@ -110,4 +110,35 @@ var/
 wheels/
 *.egg-info/
 .installed.cfg
-*.egg 
+*.egg
+
+# MLflow
+mlruns/
+mlflow-artifacts/
+mlartifacts/
+
+# Docker
+docker-compose.override.yml
+.env
+
+# Model artifacts and data
+models/**/
+!models/.gitkeep
+data/**/
+!data/.gitkeep
+
+# Logs
+*.log
+logs/
+runs/
+
+# Training outputs
+*.pt
+*.pth
+*.onnx
+*.engine
+wandb/
+
+# OS
+.DS_Store
+Thumbs.db 

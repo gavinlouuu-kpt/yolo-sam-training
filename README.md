@@ -1,6 +1,87 @@
 # YOLO-SAM Training
 
-A Python package for training and fine-tuning both YOLO and Segment Anything Model (SAM) using a unified data format.
+This repository contains training scripts and utilities for YOLO and SAM model training for cytometry applications.
+
+## Setup
+
+1. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+## MLflow Experiment Tracking
+
+The project uses MLflow for experiment tracking. You can either use a centralized MLflow server (recommended for team collaboration) or local tracking.
+
+### Option 1: Centralized MLflow Server (Recommended)
+
+1. Start the MLflow tracking server and database:
+```bash
+docker-compose up -d
+```
+
+2. Access the MLflow UI at http://localhost:5000
+
+The server setup includes:
+- PostgreSQL database for metadata storage
+- Persistent volume for artifacts
+- Automatic fallback to local tracking if server is unavailable
+
+### Option 2: Local Tracking
+
+If the MLflow server is not available, the training script automatically falls back to local tracking:
+- Experiments are stored in `./mlruns` directory
+- No additional setup required
+
+### Environment Variables
+
+- `MLFLOW_TRACKING_URI`: MLflow tracking server URL (default: http://localhost:5000)
+- `TRAINING_DATA_DIR`: Directory containing training data (default varies by script)
+
+## Training Scripts
+
+### YOLO Training
+
+Run the YOLO training script:
+```bash
+python -m yolo_sam_training.examples.yolo_training_example
+```
+
+The script will:
+1. Prepare the dataset
+2. Train/fine-tune YOLO model
+3. Log metrics and artifacts to MLflow
+4. Validate the trained model
+
+### Metrics Tracked
+
+Training metrics logged to MLflow include:
+- Training metrics (prefixed with 'train_')
+- Validation metrics (prefixed with 'val_')
+- Model artifacts and parameters
+
+## Development
+
+### Docker Setup
+
+The MLflow tracking server uses Docker Compose with:
+- PostgreSQL 14 for metadata storage
+- MLflow server with PostgreSQL driver
+- Persistent volumes for database and artifacts
+
+To rebuild the containers after changes:
+```bash
+docker-compose down
+docker-compose up --build -d
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
 ## Features
 
@@ -208,14 +289,6 @@ yolo-sam-training/
   - Model configurations
   - Training parameters
   - Input formats
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a new Pull Request
 
 ## License
 

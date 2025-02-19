@@ -1,16 +1,16 @@
 task: detect
 mode: train
 model: yolov8n.pt
-data: /Users/kpt/Code/data/prepared_yolo_dataset/dataset.yaml
-epochs: 100
+data: D:\code\ai_cytometry\data\prepared_yolo_dataset\dataset.yaml
+epochs: 200
 time: null
 patience: 50
-batch: 16
+batch: 128
 imgsz: 640
 save: true
 save_period: -1
 cache: false
-device: cpu
+device: '0'
 workers: 8
 project: models
 name: yolo_fine_tuned
@@ -70,7 +70,7 @@ simplify: true
 opset: null
 workspace: null
 nms: false
-lr0: 0.01
+lr0: 0.001
 lrf: 0.01
 momentum: 0.937
 weight_decay: 0.0005
@@ -103,4 +103,4 @@ erasing: 0.4
 crop_fraction: 1.0
 cfg: null
 tracker: botsort.yaml
-save_dir: models/yolo_fine_tuned
+save_dir: models\yolo_fine_tuned
