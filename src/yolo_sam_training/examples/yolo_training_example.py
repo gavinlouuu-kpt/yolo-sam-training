@@ -6,9 +6,6 @@ import torch
 import os
 import mlflow
 from mlflow.tracking import MlflowClient
-import requests
-from urllib.parse import urlparse
-import time
 
 from yolo_sam_training.yolo_training import (
     prepare_yolo_dataset,
@@ -20,47 +17,13 @@ from yolo_sam_training.yolo_training import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def is_server_available(tracking_uri: str, timeout: int = 5) -> bool:
-    """Check if MLflow tracking server is available."""
-    try:
-        # Parse the tracking URI
-        parsed_uri = urlparse(tracking_uri)
-        if parsed_uri.scheme not in ['http', 'https']:
-            return False
-            
-        # Try to connect to the server
-        response = requests.get(f"{tracking_uri}/health", timeout=timeout)
-        return response.status_code == 200
-    except Exception as e:
-        logger.warning(f"MLflow server check failed: {str(e)}")
-        return False
-
 def setup_mlflow_tracking():
-    """Setup MLflow tracking with fallback to local if server is unavailable."""
-    # Get tracking URI from environment or use default server
-    server_uri = os.getenv('MLFLOW_TRACKING_URI', 'http://localhost:5000')
-    
-    # Try to connect to the server
-    max_retries = 3
-    retry_delay = 2  # seconds
-    
-    for attempt in range(max_retries):
-        if is_server_available(server_uri):
-            logger.info(f"Using MLflow tracking server at {server_uri}")
-            mlflow.set_tracking_uri(server_uri)
-            return
-        
-        if attempt < max_retries - 1:
-            logger.warning(f"MLflow server not available, retrying in {retry_delay} seconds...")
-            time.sleep(retry_delay)
-    
-    # Fallback to local tracking
+    """Setup MLflow tracking for local use."""
     local_tracking_path = Path("mlruns").absolute()
-    logger.warning(
-        f"MLflow server not available after {max_retries} attempts. "
-        f"Falling back to local tracking at {local_tracking_path}"
-    )
-    mlflow.set_tracking_uri(str(local_tracking_path))
+    # Convert Windows path to proper URI format
+    tracking_uri = f"file:///{str(local_tracking_path).replace(os.sep, '/')}"
+    logger.info(f"Using local MLflow tracking at {tracking_uri}")
+    mlflow.set_tracking_uri(tracking_uri)
 
 def main():
     # Check for CUDA
@@ -102,9 +65,9 @@ def main():
             # Log training parameters
             training_params = {
                 'pretrained_model': 'yolov8n.pt',
-                'num_epochs': 200,
+                'num_epochs': 5,
                 'image_size': 640,
-                'batch_size': 128,
+                'batch_size': 200,
                 'device': device,
                 'learning_rate': 0.001,
                 'yaml_path': str(yaml_path),
@@ -117,11 +80,11 @@ def main():
                 yaml_path=yaml_path,
                 model_save_path=model_save_path,
                 pretrained_model='yolov8n.pt',
-                num_epochs=200,
-                image_size=640,
-                batch_size=128,
-                device=device,
-                learning_rate=0.001
+                num_epochs=training_params['num_epochs'],
+                image_size=training_params['image_size'],
+                batch_size=training_params['batch_size'],
+                device=training_params['device'],
+                learning_rate=training_params['learning_rate']
             )
             
             # Log training metrics

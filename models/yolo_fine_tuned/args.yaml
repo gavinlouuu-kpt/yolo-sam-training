@@ -2,10 +2,10 @@ task: detect
 mode: train
 model: yolov8n.pt
 data: D:\code\ai_cytometry\data\prepared_yolo_dataset\dataset.yaml
-epochs: 200
+epochs: 5
 time: null
 patience: 50
-batch: 128
+batch: 200
 imgsz: 640
 save: true
 save_period: -1
