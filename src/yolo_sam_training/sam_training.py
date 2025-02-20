@@ -10,7 +10,7 @@ It includes utilities for:
 
 import logging
 from pathlib import Path
-from typing import Optional, Tuple, Dict, List
+from typing import Optional, Tuple, Dict, List, Any
 import torch
 from torch.optim import Adam
 import monai.losses
@@ -395,7 +395,8 @@ def train_sam_model(
     learning_rate: float = 1e-5,
     weight_decay: float = 0,
     visualization_dir: Optional[Path] = None,
-    device: Optional[str] = None
+    device: Optional[str] = None,
+    progress_callback: Optional[Any] = None
 ) -> Tuple[Dict[str, torch.Tensor], plt.Figure]:
     """Train/fine-tune SAM model.
     
@@ -408,6 +409,7 @@ def train_sam_model(
         weight_decay: Weight decay for optimizer
         visualization_dir: Optional directory for saving visualizations
         device: Device to use for training
+        progress_callback: Optional callback for tracking progress
         
     Returns:
         Tuple containing:
@@ -443,18 +445,76 @@ def train_sam_model(
     train_losses = []
     val_losses = []
     
+    # Notify callback of training start if provided
+    if progress_callback:
+        progress_callback.on_train_start(len(train_loader))
+    
     # Training loop
     for epoch in range(num_epochs):
+        if progress_callback:
+            progress_callback.on_epoch_start(epoch + 1)
+        
         # Training phase
-        epoch_losses = train_one_epoch(
-            model=model,
-            train_loader=train_loader,
-            optimizer=optimizer,
-            loss_fn=loss_fn,
-            device=device,
-            epoch=epoch,
-            visualization_dir=visualization_dir
-        )
+        model.train()
+        epoch_losses = []
+        
+        for batch_idx, batch in enumerate(train_loader):
+            try:
+                # Move data to device
+                batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
+                        for k, v in batch.items()}
+                
+                # Validate batch shapes
+                validate_batch_shapes(batch, batch_idx)
+                
+                # Forward pass
+                outputs = model(
+                    pixel_values=batch["pixel_values"],
+                    input_boxes=batch["input_boxes"],
+                    multimask_output=False
+                )
+                
+                # Validate and normalize predicted masks
+                pred_masks = validate_pred_masks(
+                    outputs.pred_masks,
+                    expected_shape=batch["labels"].shape[-2:]
+                )
+                
+                # Compute loss
+                loss = compute_batch_loss(
+                    pred_masks=pred_masks,
+                    labels=batch["labels"],
+                    num_masks=batch["num_masks_per_sample"],
+                    loss_fn=loss_fn,
+                    batch_idx=batch_idx
+                )
+                
+                # Backward pass
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                
+                epoch_losses.append(loss.item())
+                
+                # Update progress callback
+                if progress_callback:
+                    progress_callback.on_batch_end({'loss': loss.item()})
+                
+                # Save visualizations
+                if visualization_dir and batch_idx % 10 == 0:
+                    save_prediction_visualization(
+                        image=batch["pixel_values"][0],
+                        pred_masks=pred_masks[0, :batch["num_masks_per_sample"][0]],
+                        gt_masks=batch["labels"][0, :batch["num_masks_per_sample"][0]],
+                        batch_idx=batch_idx,
+                        epoch=epoch,
+                        output_dir=visualization_dir
+                    )
+                    
+            except Exception as e:
+                logger.error(f"Error in batch {batch_idx}: {str(e)}")
+                raise
+        
         train_loss = mean(epoch_losses)
         train_losses.append(train_loss)
         
@@ -475,10 +535,16 @@ def train_sam_model(
             best_model_state = model.state_dict()
             logger.info(f'New best validation loss: {val_loss:.4f}')
         
-        # Log progress
-        logger.info(f'Epoch {epoch}:')
-        logger.info(f'  Training loss: {train_loss:.4f}')
-        logger.info(f'  Validation loss: {val_loss:.4f}')
+        # Update progress callback with epoch metrics
+        if progress_callback:
+            progress_callback.on_epoch_end({
+                'train_loss': train_loss,
+                'val_loss': val_loss
+            })
+    
+    # Notify callback of training completion
+    if progress_callback:
+        progress_callback.on_train_end()
     
     # Save model
     model_save_path.parent.mkdir(parents=True, exist_ok=True)
