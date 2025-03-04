@@ -18,12 +18,31 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def setup_mlflow_tracking():
-    """Setup MLflow tracking for local use."""
-    local_tracking_path = Path("mlruns").absolute()
-    # Convert Windows path to proper URI format
-    tracking_uri = f"file:///{str(local_tracking_path).replace(os.sep, '/')}"
-    logger.info(f"Using local MLflow tracking at {tracking_uri}")
+    """Setup MLflow tracking to use remote MLflow server."""
+    # Use the remote MLflow server running in Docker
+    tracking_uri = "http://localhost:5000"
+    logger.info(f"Using remote MLflow tracking server at {tracking_uri}")
     mlflow.set_tracking_uri(tracking_uri)
+    
+    # Set environment variables for S3 artifact store access
+    os.environ["MLFLOW_S3_ENDPOINT_URL"] = "http://localhost:9000"
+    os.environ["AWS_ACCESS_KEY_ID"] = "mibadmin"
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "cuhkminio"
+    
+    # Create experiment if it doesn't exist
+    client = MlflowClient()
+    experiment_name = "yolo_training"
+    try:
+        experiment = client.get_experiment_by_name(experiment_name)
+        if experiment is None:
+            experiment_id = client.create_experiment(experiment_name)
+            logger.info(f"Created new experiment '{experiment_name}' with ID: {experiment_id}")
+        else:
+            logger.info(f"Using existing experiment '{experiment_name}' with ID: {experiment.experiment_id}")
+            mlflow.set_experiment(experiment_name)
+    except Exception as e:
+        logger.warning(f"Error setting up experiment: {str(e)}")
+        # Continue with default experiment if there's an issue
 
 def main():
     # Check for CUDA
@@ -37,10 +56,9 @@ def main():
     
     # Setup MLflow with fallback
     setup_mlflow_tracking()
-    mlflow.set_experiment("yolo_training")
     
     # Get data directory from environment variable or use default
-    data_dir = os.getenv('TRAINING_DATA_DIR', '/Users/kpt/Code/data')
+    data_dir = os.getenv('TRAINING_DATA_DIR', '/home/mib-p5-a5000/code/ai-cyto/data')
     source_dir = Path(data_dir) / 'example_yolo_dataset'
     prepared_data_dir = Path(data_dir) / 'prepared_yolo_dataset'
     
@@ -61,11 +79,13 @@ def main():
     # Train model
     try:
         # Start MLflow run
+        experiment_name = "yolo_training"
+        mlflow.set_experiment(experiment_name)
         with mlflow.start_run(run_name="yolo_training") as run:
             # Log training parameters
             training_params = {
                 'pretrained_model': 'yolov8n.pt',
-                'num_epochs': 5,
+                'num_epochs': 200,
                 'image_size': 640,
                 'batch_size': 200,
                 'device': device,
