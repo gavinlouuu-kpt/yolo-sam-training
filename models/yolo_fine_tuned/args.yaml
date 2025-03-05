@@ -1,8 +1,8 @@
 task: detect
 mode: train
 model: yolov8n.pt
-data: D:\code\ai_cytometry\data\prepared_yolo_dataset\dataset.yaml
-epochs: 5
+data: /home/mib-p5-a5000/code/ai-cyto/data/prepared_yolo_dataset/dataset.yaml
+epochs: 200
 time: null
 patience: 50
 batch: 200
@@ -103,4 +103,4 @@ erasing: 0.4
 crop_fraction: 1.0
 cfg: null
 tracker: botsort.yaml
-save_dir: models\yolo_fine_tuned
+save_dir: models/yolo_fine_tuned

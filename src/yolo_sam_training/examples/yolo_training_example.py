@@ -84,7 +84,7 @@ def main():
         with mlflow.start_run(run_name="yolo_training") as run:
             # Log training parameters
             training_params = {
-                'pretrained_model': 'yolov8n.pt',
+                'pretrained_model': 'yolo11n.pt',
                 'num_epochs': 200,
                 'image_size': 640,
                 'batch_size': 200,
@@ -131,6 +131,49 @@ def main():
             
             # Log model artifacts
             mlflow.log_artifacts(str(model_save_path), "model")
+            
+            # Register the model in MLflow Model Registry
+            model_uri = f"runs:/{run.info.run_id}/model"
+            registered_model_name = "yolo_object_detection"
+            
+            # Register model with appropriate tags based on metrics
+            registered_model = mlflow.register_model(
+                model_uri=model_uri,
+                name=registered_model_name
+            )
+            
+            # Add tags and description to the registered model version
+            client = MlflowClient()
+            client.update_model_version(
+                name=registered_model_name,
+                version=registered_model.version,
+                description=f"YOLO model trained on custom dataset. mAP50: {metrics['mAP50']:.4f}, mAP50-95: {metrics['mAP50-95']:.4f}"
+            )
+            
+            # Add tags with key metrics and training parameters
+            tags = {
+                "mAP50": f"{metrics['mAP50']:.4f}",
+                "mAP50-95": f"{metrics['mAP50-95']:.4f}",
+                "precision": f"{metrics['precision']:.4f}",
+                "recall": f"{metrics['recall']:.4f}",
+                "val_mAP50": f"{validation_metrics['mAP50']:.4f}",
+                "val_mAP50-95": f"{validation_metrics['mAP50-95']:.4f}",
+                "image_size": str(training_params['image_size']),
+                "batch_size": str(training_params['batch_size']),
+                "epochs": str(training_params['num_epochs']),
+                "learning_rate": str(training_params['learning_rate']),
+                "device": training_params['device']
+            }
+            
+            for key, value in tags.items():
+                client.set_model_version_tag(
+                    name=registered_model_name,
+                    version=registered_model.version,
+                    key=key,
+                    value=value
+                )
+            
+            logger.info(f"Model registered in MLflow Model Registry with name: {registered_model_name}, version: {registered_model.version}")
             
     except Exception as e:
         logger.error(f"Error during training/validation: {str(e)}")

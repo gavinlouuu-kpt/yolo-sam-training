@@ -19,6 +19,11 @@ import matplotlib.pyplot as plt
 from statistics import mean
 from transformers import SamModel
 import numpy as np
+import mlflow
+import mlflow.pytorch
+import tempfile
+import os
+import shutil
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +33,8 @@ def save_prediction_visualization(
     gt_masks: torch.Tensor,
     batch_idx: int,
     epoch: int,
-    output_dir: Path,
+    output_dir: Path = None,
+    mlflow_run = None
 ):
     """Save visualization of model predictions.
     
@@ -38,67 +44,95 @@ def save_prediction_visualization(
         gt_masks: Ground truth masks tensor [N, H, W] or [1, N, H, W]
         batch_idx: Current batch index
         epoch: Current epoch
-        output_dir: Directory to save visualizations
+        output_dir: Directory to save visualizations (optional)
+        mlflow_run: MLflow run to log artifacts to (optional)
     """
-    # Create output directory
-    vis_dir = output_dir / f'epoch_{epoch}'
-    vis_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Ensure all tensors are on CPU and convert to numpy
-    def prepare_tensor(x: torch.Tensor) -> np.ndarray:
-        x = x.detach().cpu()
-        if x.ndim == 4:  # Remove batch dimension if present
-            x = x.squeeze(0)
-        return x.numpy()
-    
-    # Prepare image
-    image = prepare_tensor(image)
-    if image.shape[0] == 3:  # If channels first
-        image = np.transpose(image, (1, 2, 0))
-    
-    # Normalize image to [0, 1] range for display
-    image = (image - image.min()) / (image.max() - image.min())
-    
-    # Prepare masks
-    pred_masks = prepare_tensor(pred_masks)
-    gt_masks = prepare_tensor(gt_masks)
-    
-    # Get number of masks
-    n_masks = pred_masks.shape[0]
-    
-    # Create figure with rows for each mask
-    fig, axes = plt.subplots(n_masks, 3, figsize=(15, 5 * n_masks))
-    if n_masks == 1:
-        axes = axes[None, :]  # Add dimension for consistent indexing
-    
-    # Plot each mask
-    for i in range(n_masks):
-        # Plot original image
-        axes[i, 0].imshow(image)
-        axes[i, 0].set_title(f'Original Image (Mask {i+1})')
-        axes[i, 0].axis('off')
+    try:
+        # Ensure all tensors are on CPU and convert to numpy
+        def prepare_tensor(x: torch.Tensor) -> np.ndarray:
+            x = x.detach().cpu()
+            if x.ndim == 4:  # Remove batch dimension if present
+                x = x.squeeze(0)
+            return x.numpy()
         
-        # Plot predicted mask
-        pred_mask = pred_masks[i]
-        if pred_mask.ndim == 3:  # If shape is (1, H, W)
-            pred_mask = pred_mask.squeeze(0)
-        axes[i, 1].imshow(pred_mask, cmap='gray', vmin=0, vmax=1)
-        axes[i, 1].set_title(f'Predicted Mask {i+1}')
-        axes[i, 1].axis('off')
+        # Prepare image
+        image = prepare_tensor(image)
+        if image.shape[0] == 3:  # If channels first
+            image = np.transpose(image, (1, 2, 0))
         
-        # Plot ground truth mask
-        gt_mask = gt_masks[i]
-        if gt_mask.ndim == 3:  # If shape is (1, H, W)
-            gt_mask = gt_mask.squeeze(0)
-        axes[i, 2].imshow(gt_mask, cmap='gray', vmin=0, vmax=1)
-        axes[i, 2].set_title(f'Ground Truth Mask {i+1}')
-        axes[i, 2].axis('off')
-    
-    plt.tight_layout()
-    
-    # Save figure
-    plt.savefig(vis_dir / f'batch_{batch_idx}.png')
-    plt.close(fig)
+        # Normalize image to [0, 1] range for display
+        image = (image - image.min()) / (image.max() - image.min())
+        
+        # Prepare masks
+        pred_masks = prepare_tensor(pred_masks)
+        gt_masks = prepare_tensor(gt_masks)
+        
+        # Get number of masks
+        n_masks = pred_masks.shape[0]
+        
+        # Create figure with rows for each mask
+        fig, axes = plt.subplots(n_masks, 3, figsize=(15, 5 * n_masks))
+        if n_masks == 1:
+            axes = axes[None, :]  # Add dimension for consistent indexing
+        
+        # Plot each mask
+        for i in range(n_masks):
+            # Plot original image
+            axes[i, 0].imshow(image)
+            axes[i, 0].set_title(f'Original Image (Mask {i+1})')
+            axes[i, 0].axis('off')
+            
+            # Plot predicted mask
+            pred_mask = pred_masks[i]
+            if pred_mask.ndim == 3:  # If shape is (1, H, W)
+                pred_mask = pred_mask.squeeze(0)
+            axes[i, 1].imshow(pred_mask, cmap='gray', vmin=0, vmax=1)
+            axes[i, 1].set_title(f'Predicted Mask {i+1}')
+            axes[i, 1].axis('off')
+            
+            # Plot ground truth mask
+            gt_mask = gt_masks[i]
+            if gt_mask.ndim == 3:  # If shape is (1, H, W)
+                gt_mask = gt_mask.squeeze(0)
+            axes[i, 2].imshow(gt_mask, cmap='gray', vmin=0, vmax=1)
+            axes[i, 2].set_title(f'Ground Truth Mask {i+1}')
+            axes[i, 2].axis('off')
+        
+        plt.tight_layout()
+        
+        # Create a temporary file to save the figure
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+            temp_path = temp_file.name
+        
+        # Save figure to temporary file
+        plt.savefig(temp_path)
+        plt.close(fig)  # Close the figure to free memory
+        
+        # If MLflow run is provided, log the visualization as an artifact
+        if mlflow_run:
+            artifact_path = f"visualizations/epoch_{epoch}"
+            mlflow.log_artifact(temp_path, artifact_path)
+            logger.debug(f"Saved visualization to MLflow as {artifact_path}/batch_{batch_idx}.png")
+            # Remove the temporary file after logging
+            os.unlink(temp_path)
+        # If output_dir is provided, save to local directory
+        elif output_dir:
+            # Create output directory
+            vis_dir = output_dir / f'epoch_{epoch}'
+            vis_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Save figure
+            output_file = vis_dir / f'batch_{batch_idx}.png'
+            logger.debug(f"Saving visualization to {output_file}")
+            # Move the temporary file to the output directory
+            shutil.move(temp_path, output_file)
+        else:
+            # If neither MLflow nor output_dir is provided, just remove the temporary file
+            os.unlink(temp_path)
+            
+    except Exception as e:
+        logger.warning(f"Error saving visualization for batch {batch_idx} in epoch {epoch}: {str(e)}")
+        # Continue without failing the training process
 
 def validate_batch_shapes(batch: Dict[str, torch.Tensor], batch_idx: int = None) -> None:
     """Validate shapes of tensors in a batch.
@@ -390,26 +424,28 @@ def validate_one_epoch(
 def train_sam_model(
     train_loader: torch.utils.data.DataLoader,
     val_loader: torch.utils.data.DataLoader,
-    model_save_path: Path,
+    model_save_path: Optional[Path] = None,
     num_epochs: int = 10,
     learning_rate: float = 1e-5,
     weight_decay: float = 0,
     visualization_dir: Optional[Path] = None,
     device: Optional[str] = None,
-    progress_callback: Optional[Any] = None
+    progress_callback: Optional[Any] = None,
+    mlflow_run = None
 ) -> Tuple[Dict[str, torch.Tensor], plt.Figure]:
     """Train/fine-tune SAM model.
     
     Args:
         train_loader: Training data loader
         val_loader: Validation data loader
-        model_save_path: Path to save trained model
+        model_save_path: Optional path to save trained model locally
         num_epochs: Number of training epochs
         learning_rate: Learning rate for optimizer
         weight_decay: Weight decay for optimizer
         visualization_dir: Optional directory for saving visualizations
         device: Device to use for training
         progress_callback: Optional callback for tracking progress
+        mlflow_run: Optional MLflow run to log artifacts to
         
     Returns:
         Tuple containing:
@@ -501,14 +537,15 @@ def train_sam_model(
                     progress_callback.on_batch_end({'loss': loss.item()})
                 
                 # Save visualizations
-                if visualization_dir and batch_idx % 10 == 0:
+                if (visualization_dir or mlflow_run) and batch_idx % 10 == 0:
                     save_prediction_visualization(
                         image=batch["pixel_values"][0],
                         pred_masks=pred_masks[0, :batch["num_masks_per_sample"][0]],
                         gt_masks=batch["labels"][0, :batch["num_masks_per_sample"][0]],
                         batch_idx=batch_idx,
                         epoch=epoch,
-                        output_dir=visualization_dir
+                        output_dir=visualization_dir,
+                        mlflow_run=mlflow_run
                     )
                     
             except Exception as e:
@@ -534,6 +571,16 @@ def train_sam_model(
             best_val_loss = val_loss
             best_model_state = model.state_dict()
             logger.info(f'New best validation loss: {val_loss:.4f}')
+            
+            # Log best model to MLflow directly
+            if mlflow_run:
+                logger.info("Logging best model to MLflow")
+                # Save model to a temporary directory first
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    tmp_model_path = Path(tmp_dir) / "best_model"
+                    model.save_pretrained(str(tmp_model_path))
+                    # Log the model directory as an artifact
+                    mlflow.log_artifacts(str(tmp_model_path), "best_model")
         
         # Update progress callback with epoch metrics
         if progress_callback:
@@ -546,9 +593,30 @@ def train_sam_model(
     if progress_callback:
         progress_callback.on_train_end()
     
-    # Save model
-    model_save_path.parent.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(str(model_save_path))
+    # Save final model
+    if mlflow_run:
+        # Log final model to MLflow
+        logger.info("Logging final model to MLflow")
+        # Save model to a temporary directory first
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_model_path = Path(tmp_dir) / "model"
+            model.save_pretrained(str(tmp_model_path))
+            # Log the model directory as an artifact
+            mlflow.log_artifacts(str(tmp_model_path), "model")
+            
+            # Also log as a PyTorch model for inference
+            mlflow.pytorch.log_model(
+                model,
+                "pytorch_model",
+                registered_model_name="sam_segmentation"
+            )
+    elif model_save_path:
+        # Save model locally if MLflow is not available and path is provided
+        logger.info(f"Saving model locally to {model_save_path}")
+        model_save_path.parent.mkdir(parents=True, exist_ok=True)
+        model.save_pretrained(str(model_save_path))
+    else:
+        logger.warning("No MLflow run or model_save_path provided, model will not be saved")
     
     # Create loss plot
     fig = plt.figure(figsize=(10, 5))
@@ -558,5 +626,13 @@ def train_sam_model(
     plt.ylabel('Loss')
     plt.title('Training and Validation Losses')
     plt.legend()
+    
+    # If MLflow run is provided, log the loss plot directly
+    if mlflow_run:
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+            temp_path = temp_file.name
+        plt.savefig(temp_path)
+        mlflow.log_artifact(temp_path, "plots")
+        os.unlink(temp_path)
     
     return best_model_state, fig 
