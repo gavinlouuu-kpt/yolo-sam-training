@@ -24,6 +24,7 @@ import mlflow.pytorch
 import tempfile
 import os
 import shutil
+import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
@@ -201,33 +202,79 @@ def validate_batch_shapes(batch: Dict[str, torch.Tensor], batch_idx: int = None)
             if isinstance(tensor, torch.Tensor):
                 logger.info(f"  {key}: {tensor.shape}")
 
-def validate_pred_masks(pred_masks: torch.Tensor, expected_shape: tuple) -> torch.Tensor:
-    """Validate and normalize predicted mask shapes.
+def smooth_masks(masks: torch.Tensor, sigma: float = 1.0) -> torch.Tensor:
+    """Apply Gaussian smoothing to predicted masks.
     
     Args:
-        pred_masks: Predicted masks tensor
-        expected_shape: Expected shape (excluding batch dimension)
-    
+        masks: Predicted masks tensor [B, N, H, W]
+        sigma: Standard deviation for Gaussian kernel
+        
     Returns:
-        Normalized pred_masks tensor
+        Smoothed masks tensor [B, N, H, W]
     """
-    # Handle extra dimension from SAM output
-    if len(pred_masks.shape) == 5:  # [B, max_masks, 1, H, W]
-        pred_masks = pred_masks.squeeze(2)
+    # Ensure masks are in the right shape
+    original_shape = masks.shape
+    if len(original_shape) == 3:
+        masks = masks.unsqueeze(1)  # Add channel dimension if needed
     
-    # Validate shape
-    if len(pred_masks.shape) != 4:  # Should be [B, max_masks, H, W]
-        raise ValueError(
-            f"Wrong number of dimensions for pred_masks. "
-            f"Expected 4, got {len(pred_masks.shape)}"
-        )
+    # Apply Gaussian blur
+    padding = int(sigma * 4)
+    kernel_size = 2 * padding + 1
     
-    # Validate spatial dimensions
-    if pred_masks.shape[-2:] != expected_shape[-2:]:
-        raise ValueError(
-            f"Wrong spatial dimensions for pred_masks. "
-            f"Expected {expected_shape[-2:]}, got {pred_masks.shape[-2:]}"
-        )
+    # Process each mask in the batch
+    smoothed_masks = []
+    for i in range(masks.shape[0]):
+        batch_masks = []
+        for j in range(masks.shape[1]):
+            # Apply 2D Gaussian blur
+            mask = masks[i, j].unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
+            smoothed = F.gaussian_blur(mask, kernel_size=[kernel_size, kernel_size], sigma=[sigma, sigma])
+            batch_masks.append(smoothed.squeeze(0).squeeze(0))
+        smoothed_masks.append(torch.stack(batch_masks))
+    
+    # Stack back to original shape
+    result = torch.stack(smoothed_masks)
+    
+    # Threshold to get binary masks
+    result = (result > 0.5).float()
+    
+    # Return in the original shape format
+    if len(original_shape) == 3:
+        result = result.squeeze(1)
+        
+    return result
+
+def validate_pred_masks(pred_masks: torch.Tensor, expected_shape: tuple, apply_smoothing: bool = True) -> torch.Tensor:
+    """Validate and normalize predicted masks.
+    
+    Args:
+        pred_masks: Predicted masks from model output
+        expected_shape: Expected shape of the output masks (H, W)
+        apply_smoothing: Whether to apply smoothing to the masks
+        
+    Returns:
+        Normalized and validated masks
+    """
+    # Original validation code
+    if pred_masks is None:
+        raise ValueError("Predicted masks cannot be None")
+    
+    # Reshape if needed
+    if len(pred_masks.shape) == 4 and pred_masks.shape[1] == 1:
+        pred_masks = pred_masks.squeeze(1)
+    
+    # Ensure masks match expected shape
+    if pred_masks.shape[-2:] != expected_shape:
+        pred_masks = F.interpolate(
+            pred_masks.unsqueeze(1),
+            size=expected_shape,
+            mode='bilinear',
+            align_corners=False
+        ).squeeze(1)
+    
+    # Apply smoothing if requested
+    if apply_smoothing:
+        pred_masks = smooth_masks(pred_masks)
     
     return pred_masks
 
@@ -431,7 +478,9 @@ def train_sam_model(
     visualization_dir: Optional[Path] = None,
     device: Optional[str] = None,
     progress_callback: Optional[Any] = None,
-    mlflow_run = None
+    mlflow_run = None,
+    early_stopping_patience: int = 20,
+    early_stopping_min_delta: float = 0.0001
 ) -> Tuple[Dict[str, torch.Tensor], plt.Figure]:
     """Train/fine-tune SAM model.
     
@@ -446,6 +495,8 @@ def train_sam_model(
         device: Device to use for training
         progress_callback: Optional callback for tracking progress
         mlflow_run: Optional MLflow run to log artifacts to
+        early_stopping_patience: Number of epochs to wait for improvement before stopping
+        early_stopping_min_delta: Minimum change to qualify as improvement
         
     Returns:
         Tuple containing:
@@ -481,6 +532,9 @@ def train_sam_model(
     train_losses = []
     val_losses = []
     
+    # Early stopping variables
+    patience_counter = 0
+    
     # Notify callback of training start if provided
     if progress_callback:
         progress_callback.on_train_start(len(train_loader))
@@ -513,7 +567,8 @@ def train_sam_model(
                 # Validate and normalize predicted masks
                 pred_masks = validate_pred_masks(
                     outputs.pred_masks,
-                    expected_shape=batch["labels"].shape[-2:]
+                    expected_shape=batch["labels"].shape[-2:],
+                    apply_smoothing=(epoch > 0)  # Only apply smoothing after epoch 0
                 )
                 
                 # Compute loss
@@ -567,10 +622,11 @@ def train_sam_model(
         val_losses.append(val_loss)
         
         # Track best model
-        if val_loss < best_val_loss:
+        if val_loss < best_val_loss - early_stopping_min_delta:
             best_val_loss = val_loss
             best_model_state = model.state_dict()
             logger.info(f'New best validation loss: {val_loss:.4f}')
+            patience_counter = 0
             
             # Log best model to MLflow directly
             if mlflow_run:
@@ -581,6 +637,14 @@ def train_sam_model(
                     model.save_pretrained(str(tmp_model_path))
                     # Log the model directory as an artifact
                     mlflow.log_artifacts(str(tmp_model_path), "best_model")
+        else:
+            patience_counter += 1
+            logger.info(f'No improvement in validation loss. Patience: {patience_counter}/{early_stopping_patience}')
+            
+            # Check if early stopping criteria is met
+            if patience_counter >= early_stopping_patience:
+                logger.info(f'Early stopping triggered after {epoch + 1} epochs')
+                break
         
         # Update progress callback with epoch metrics
         if progress_callback:
@@ -605,11 +669,48 @@ def train_sam_model(
             mlflow.log_artifacts(str(tmp_model_path), "model")
             
             # Also log as a PyTorch model for inference
-            mlflow.pytorch.log_model(
-                model,
-                "pytorch_model",
-                registered_model_name="sam_segmentation"
-            )
+            # Create a sample input for the model using an actual sample from the validation set
+            logger.info("Creating input example from validation data for model signature")
+            try:
+                # Get a sample batch from the validation loader
+                sample_batch = next(iter(val_loader))
+                
+                # Move tensors to CPU for MLflow
+                sample_input = {
+                    "pixel_values": sample_batch["pixel_values"][0:1].detach().cpu(),
+                    "input_points": sample_batch["input_points"][0:1].detach().cpu() if "input_points" in sample_batch else torch.zeros((1, 1, 2)),
+                    "input_labels": sample_batch["input_labels"][0:1].detach().cpu() if "input_labels" in sample_batch else torch.ones((1, 1)),
+                    "input_boxes": None,
+                    "input_masks": None
+                }
+                logger.info(f"Created input example with image shape: {sample_input['pixel_values'].shape}")
+                
+                # Log the model with MLflow
+                mlflow.pytorch.log_model(
+                    model,
+                    "pytorch_model",
+                    registered_model_name="sam_segmentation",
+                    input_example=sample_input
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create input example from validation data: {str(e)}")
+                # Fallback to zeros if there's an issue
+                logger.info("Using fallback zeros tensor for input example")
+                sample_input = {
+                    "pixel_values": torch.zeros((1, 3, 1024, 1024)),
+                    "input_points": torch.zeros((1, 1, 2)),
+                    "input_labels": torch.ones((1, 1)),
+                    "input_boxes": None,
+                    "input_masks": None
+                }
+                
+                # Log the model with MLflow
+                mlflow.pytorch.log_model(
+                    model,
+                    "pytorch_model",
+                    registered_model_name="sam_segmentation",
+                    input_example=sample_input
+                )
     elif model_save_path:
         # Save model locally if MLflow is not available and path is provided
         logger.info(f"Saving model locally to {model_save_path}")

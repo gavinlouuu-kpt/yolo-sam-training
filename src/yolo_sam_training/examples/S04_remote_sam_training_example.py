@@ -61,15 +61,27 @@ class TrainingProgressCallback:
             if self.mlflow_run:
                 step = (self.current_epoch - 1) * self.batch_pbar.total + self.batch_pbar.n
                 for key, value in batch_metrics.items():
+                    # Convert tensor to float if needed
+                    if isinstance(value, torch.Tensor):
+                        value = value.item()
                     mlflow.log_metric(f"batch_{key}", value, step=step)
             
     def on_epoch_end(self, epoch_metrics):
         """Called at the end of each epoch."""
         self.epoch_pbar.update(1)
-        self.metrics = epoch_metrics
+        
+        # Convert any tensor metrics to Python native types
+        converted_metrics = {}
+        for key, value in epoch_metrics.items():
+            if isinstance(value, torch.Tensor):
+                converted_metrics[key] = value.item()
+            else:
+                converted_metrics[key] = value
+                
+        self.metrics = converted_metrics
         
         # Update best metrics
-        for key, value in epoch_metrics.items():
+        for key, value in converted_metrics.items():
             if key not in self.best_metrics or value < self.best_metrics[key]:
                 self.best_metrics[key] = value
         
@@ -79,14 +91,14 @@ class TrainingProgressCallback:
         eta = elapsed_time / self.epoch_pbar.n * epochs_remaining if self.epoch_pbar.n > 0 else 0
         
         # Format metrics for display
-        metrics_str = ' '.join(f"{k}: {v:.4f}" for k, v in epoch_metrics.items())
+        metrics_str = ' '.join(f"{k}: {v:.4f}" for k, v in converted_metrics.items())
         eta_str = time.strftime('%H:%M:%S', time.gmtime(eta))
         logger.info(f"Epoch {self.epoch_pbar.n}/{self.num_epochs} - {metrics_str} - ETA: {eta_str}")
         
         # Log metrics to MLflow if available
         if self.mlflow_run:
             # Log epoch metrics
-            for key, value in epoch_metrics.items():
+            for key, value in converted_metrics.items():
                 mlflow.log_metric(f"epoch_{key}", value, step=self.epoch_pbar.n)
             
             # Log best metrics so far
@@ -207,7 +219,7 @@ def main():
         with mlflow.start_run(run_name="sam_training") as run:
             # Prepare training parameters
             training_params = {
-                'num_epochs': 50,
+                'num_epochs': 100,  # Reduced from 200
                 'learning_rate': 1e-5,
                 'batch_size': 4,
                 'device': device,
@@ -217,7 +229,9 @@ def main():
                 'train_size': len(train_dataset),
                 'val_size': len(test_dataset),
                 'cuda_device': torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
-                'torch_version': torch.__version__
+                'torch_version': torch.__version__,
+                'early_stopping_patience': 15,
+                'early_stopping_min_delta': 0.0001
             }
             
             # Log parameters
@@ -247,7 +261,9 @@ def main():
                 learning_rate=training_params['learning_rate'],
                 device=device,
                 progress_callback=progress_callback,
-                mlflow_run=run  # Pass MLflow run to train_sam_model
+                mlflow_run=run,  # Pass MLflow run to train_sam_model
+                early_stopping_patience=training_params['early_stopping_patience'],
+                early_stopping_min_delta=training_params['early_stopping_min_delta']
             )
             
             # Register the model in MLflow Model Registry
@@ -296,13 +312,19 @@ def main():
                 
                 # Add best metrics to tags if available
                 for key, value in best_metrics.items():
+                    if isinstance(value, torch.Tensor):
+                        value = value.item()
                     tags[f"best_{key}"] = f"{value:.4f}"
                 
                 # Add final metrics to tags
                 for key, value in progress_callback.metrics.items():
+                    if isinstance(value, torch.Tensor):
+                        value = value.item()
                     tags[f"final_{key}"] = f"{value:.4f}"
                 
                 for key, value in tags.items():
+                    # Ensure value is a string
+                    value = str(value)
                     client.set_model_version_tag(
                         name=registered_model_name,
                         version=registered_model.version,
